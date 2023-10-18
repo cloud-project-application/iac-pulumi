@@ -19,6 +19,13 @@ const public_Route = config.require("publicRoute");
 const destinationCidr = config.require("destinationCidr");
 const public_route_association = config.require("public-route-association");
 const private_route_association = config.require("private-route-association");
+const applicationSecurityGroupName = config.require("securityGroupName"); 
+const ec2InstanceName = config.require("ec2InstName"); 
+const protocolType = config.require("protocoltcp");
+const insType = config.require("insType");
+const ami_ID = config.require("amiId");
+const volType = config.require("volumeType");
+const keypairName= config.require("keypairName");
 
 const publicSubnets = [];
 const privateSubnets = [];
@@ -130,5 +137,54 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
                 Name: `${private_route_association}`,
             },
         });
+    });
+
+
+    const applicationSecurityGroup = new aws.ec2.SecurityGroup(`${applicationSecurityGroupName}`, {
+        vpcId: vpc.id,
+        ingress: [
+            {
+                protocol: `${protocolType}`,
+                fromPort: 22,
+                toPort: 22,
+                cidrBlocks: [`${destinationCidr}`],
+            },
+            {
+                protocol: `${protocolType}`,
+                fromPort: 80,
+                toPort: 80,
+                cidrBlocks: [`${destinationCidr}`], 
+            },
+            {
+                protocol: `${protocolType}`,
+                fromPort: 443,
+                toPort: 443,
+                cidrBlocks: [`${destinationCidr}`], 
+            },
+            {
+                protocol: `${protocolType}`,
+                fromPort: 3000, 
+                toPort: 3000, 
+                cidrBlocks: [`${destinationCidr}`], 
+            },
+        ],
+    });
+  
+
+  const selectedPublicSubnet = publicSubnets[0];
+  const ec2Instance = new aws.ec2.Instance(`${ec2InstanceName}`, {
+        instanceType: `${insType}`,
+        ami: `${ami_ID}`, 
+        vpcSecurityGroupIds: [applicationSecurityGroup.id], 
+        subnetId: selectedPublicSubnet.id, 
+        rootBlockDevice: {
+            volumeSize: 25,
+            volumeType: `${volType}`,
+            deleteOnTermination: true, 
+        },
+        keyName: `${keypairName}`,
+        tags: {
+            Name: ec2InstanceName,
+        },
     });
 });
