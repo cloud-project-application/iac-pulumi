@@ -26,6 +26,17 @@ const insType = config.require("insType");
 const ami_ID = config.require("amiId");
 const volType = config.require("volumeType");
 const keypairName= config.require("keypairName");
+const rdsParameterGroupName= config.require("rdsParameterGroup");
+const dbVersion= config.require("dbVersion");
+const dbSecurityGroupName= config.require("dbSecurityGroup");
+const rdsSubnetGroupName= config.require("rdsSubnetGroupName");
+const des= config.require("des");
+const finalName= config.require("finalName");
+const gp= config.require("gp");
+const db= config.require("db");
+const instClass= config.require("instClass");
+const pass= config.require("pass");
+const instName= config.require("instName");
 
 const publicSubnets = [];
 const privateSubnets = [];
@@ -168,8 +179,80 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
                 cidrBlocks: [`${destinationCidr}`], 
             },
         ],
+        egress: [
+            {
+              fromPort: 3306, 
+              toPort: 3306,
+              protocol: `${protocolType}`,
+              cidrBlocks: [`${destinationCidr}`], 
+            },
+        ],
     });
+
+
+    const rdsParameterGroup = new aws.rds.ParameterGroup(`${rdsParameterGroupName}`, {
+        family: `${dbVersion}`, 
+        // parameters: [
+        //     {
+        //         name: "parameter_name",
+        //         value: "parameter_value",
+        //     },
+        //     // Add other parameters as needed
+        // ],
+    });
+
+    // Create RDS Security Group
+    const dbSecurityGroup = new aws.ec2.SecurityGroup(`${dbSecurityGroupName}`, {
+        vpcId: vpc.id,
+        ingress: [
+            {
+                fromPort: 3306, 
+                toPort: 3306,
+                protocol: `${protocolType}`,
+                securityGroups: [applicationSecurityGroup.id],
+            },
+        ],
+    });
+
+    const rdsPrivateSubnetOne = privateSubnets[0];
+    const rdsPrivateSubnetTwo = privateSubnets[1];
+
+    const rdsSubnetGroup = new aws.rds.SubnetGroup(`${rdsSubnetGroupName}`, {
+        subnetIds: [rdsPrivateSubnetOne, rdsPrivateSubnetTwo],
+        description: `${des}`,
+    });
+
+    // Create RDS Instance
+    const rdsInstance = new aws.rds.Instance(`${finalName}`, {
+        allocatedStorage: 20, 
+        storageType: `${gp}`, 
+        engine: `${db}`,
+        instanceClass: `${instClass}`,
+        dbName: `${finalName}`,
+        username: `${finalName}`,
+        password: `${pass}`,
+        parameterGroupName: rdsParameterGroup.name,
+        skipFinalSnapshot: true,
+        vpcSecurityGroupIds: [dbSecurityGroup.id],
+        dbSubnetGroupName: rdsSubnetGroup.name, 
+        multiAz: false,
+        tags: {
+            Name: `${instName}`,
+        },
+    });
+    endpoint = rdsInstance.endpoint;
   
+    const userDataScript = pulumi.interpolate `
+    #!/bin/bash
+    #!/bin/bash
+    echo "NODE_ENV=amienv" >> /etc/environment
+    endpoint="${rdsInstance.endpoint}"
+    echo "HOST=\${endpoint%:*}" >> /etc/environment
+    echo "PORT=3306" >> /etc/environment
+    echo DATABASE_USERNAME=csye6225 >> /etc/environment
+    echo DATABASE_PASSWORD=root1234 >> /etc/environment
+    echo DATABASE_NAME=csye6225 >> /etc/environment
+    sudo systemctl start webapp`.apply((s) => s.trim());
 
   const selectedPublicSubnet = publicSubnets[0];
   const ec2Instance = new aws.ec2.Instance(`${ec2InstanceName}`, {
@@ -182,6 +265,7 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
             volumeType: `${volType}`,
             deleteOnTermination: true, 
         },
+        userData: userDataScript,
         keyName: `${keypairName}`,
         tags: {
             Name: ec2InstanceName,
