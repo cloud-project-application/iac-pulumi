@@ -37,6 +37,8 @@ const db= config.require("db");
 const instClass= config.require("instClass");
 const pass= config.require("pass");
 const instName= config.require("instName");
+const awsRoute53 = require("@pulumi/aws/route53");
+const awsIAM = require("@pulumi/aws/iam");
 
 const publicSubnets = [];
 const privateSubnets = [];
@@ -63,6 +65,57 @@ function getFirstNAvailabilityZones(data, n) {
 const availabilityZoneNames = []; // Initialize an array to store availability zone names
 
 aws.getAvailabilityZones({ state: `${state}` }).then(data => {
+    const role = new aws.iam.Role("cloud-watch-user", {
+        assumeRolePolicy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Action: "sts:AssumeRole",
+              Effect: "Allow",
+              Principal: {
+                Service: "ec2.amazonaws.com",
+              },
+            },
+          ],
+        }),
+      });
+       
+    const policy = new aws.iam.Policy("examplePolicy", {
+        policy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents",
+                "logs:DescribeLogStreams",
+                "cloudwatch:PutMetricData",
+                "cloudwatch:GetMetricData",
+                "cloudwatch:GetMetricStatistics",
+                "cloudwatch:ListMetrics",
+                "ec2:DescribeTags",
+              ],
+              Resource: "*",
+            },
+          ],
+        }),
+    });
+       
+    const rolePolicyAttachment = new aws.iam.RolePolicyAttachment(
+        "my-role-policy-attachment",
+        {
+          role: role.name,
+          // policyArn: aws.iam.getPolicy({ name: "CloudWatch_Permission" }).then(p => p.arn),
+          policyArn: policy.arn,
+        }
+      );
+       
+    const instanceProfile = new aws.iam.InstanceProfile("my-instance-profile", {
+        role: role.name,
+    });
+
     const availabilityZones = getFirstNAvailabilityZones(data, availabilityZoneCount); // Choose the first 3 AZs if available AZs are greater than 3
     const vpc = new aws.ec2.Vpc(`${vpcName}`, {
         cidrBlock: `${vpcCidrBlock}`,
@@ -186,6 +239,12 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
               protocol: `${protocolType}`,
               cidrBlocks: [`${destinationCidr}`], 
             },
+            {
+                fromPort: 443, 
+                toPort: 443,
+                protocol: `${protocolType}`,
+                cidrBlocks: [`${destinationCidr}`], 
+            },
         ],
     });
 
@@ -258,6 +317,7 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
   const ec2Instance = new aws.ec2.Instance(`${ec2InstanceName}`, {
         instanceType: `${insType}`,
         ami: `${ami_ID}`, 
+        iamInstanceProfile: instanceProfile.name,
         vpcSecurityGroupIds: [applicationSecurityGroup.id], 
         subnetId: selectedPublicSubnet.id, 
         rootBlockDevice: {
@@ -270,5 +330,12 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
         tags: {
             Name: ec2InstanceName,
         },
+    });
+    const myDomainARecord = new awsRoute53.Record("my-domain-a-record", {
+        name: "demo.webappassignment.me",
+        type: "A",
+        zoneId: "Z01373271VI7ES47A1AF1", // Replace with your Route53 hosted zone ID
+        ttl: 300, // Adjust the TTL value as needed
+        records: [ec2Instance.publicIp], // Use the public IP of your EC2 instance
     });
 });
