@@ -21,7 +21,7 @@ config:
   private-route-association: "private-route-association"
   protocoltcp: "tcp"
   insType: "t2.micro"
-  amiId: "ami-09849d5bdc853a9d8"
+  amiId: "ami-0b2fb252948439669"
   volumeType: "gp2"
   keypairName: "sshkeypair"
   securityGroupName: "application security group"
@@ -37,3 +37,4 @@ config:
   instClass: "db.t2.micro"
   pass: "root1234"
   instName: "myRdsInstance"
+  autoscalinggroup: "my-auto-scaling-group"
