@@ -21,7 +21,7 @@ config:
   private-route-association: "private-route-association"
   protocoltcp: "tcp"
   insType: "t2.micro"
-  amiId: "ami-0b2fb252948439669"
+  amiId: "ami-05297d538bf995390"
   volumeType: "gp2"
   keypairName: "sshkeypair"
   securityGroupName: "application security group"
