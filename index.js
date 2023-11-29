@@ -1,5 +1,7 @@
 const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
+const gcp = require("@pulumi/gcp");
+
 
 const config = new pulumi.Config();
 const availabilityZoneCount = config.getNumber("availabilityZoneCount");
@@ -65,6 +67,153 @@ function getFirstNAvailabilityZones(data, n) {
 const availabilityZoneNames = []; // Initialize an array to store availability zone names
 
 aws.getAvailabilityZones({ state: `${state}` }).then(data => {
+
+    const snsTopic = new aws.sns.Topic("mySnsTopic-uq-ns", {
+        displayName: "My SNS Topic",
+    });
+
+    const gcsBucket = new gcp.storage.Bucket("mygcsbucketuqns", {
+        // name: "my-gcs-bucket",
+        location: "US",
+    });
+
+    const gcpServiceAccount = new gcp.serviceaccount.Account("myGcpServiceAccount-uq-ns", {
+        accountId: "my-service-account-ns",
+        displayName: "My Service Account",
+    });
+    const gcpServiceAccountKeys = new gcp.serviceaccount.Key("myGcpServiceAccountKey-uq-ns", {
+        serviceAccountId: gcpServiceAccount.name,
+    });
+
+    const serviceAccountEmail = gcpServiceAccount.email.apply(email => email);
+
+    // Grant permissions to the Service Account for the bucket
+    const bucketIAMBinding = new gcp.storage.BucketIAMBinding("bucketIamBinding", {
+        bucket: gcsBucket.name,
+        role: "roles/storage.objectAdmin", // Role granting storage.objects.create permission
+        members: [gcpServiceAccount.email.apply(email => `serviceAccount:${email}`)],
+    });
+
+    const dynamoDBTable = new aws.dynamodb.Table("my-dynamodb-table-uq-ns", {
+        name: "my-dynamodb-table-uq-ns",
+        attributes: [{
+            name: "id",
+            type: "S",
+        }],
+        hashKey: "id",
+        readCapacity: 5,
+        writeCapacity: 5,
+    });
+
+    const lambdaRole = new aws.iam.Role("myLambdaRole", {
+        // ... (existing IAM Role properties)
+    
+        // Attach policies needed for Lambda Function
+        assumeRolePolicy: JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [{
+                Action: "sts:AssumeRole",
+                Effect: "Allow",
+                Principal:{
+                    Service: "lambda.amazonaws.com",
+                }
+            }], 
+        }),
+    });
+
+    // const lambdaRolePolicy = new aws.iam.RolePolicy("lambdaRolePolicy", {
+    //     role: lambdaRole.id,
+    //     policy: {
+    //       Version: "2012-10-17",
+    //       Statement: [
+    //         {
+    //           Effect: "Allow",
+    //           Action: [
+    //             "logs:CreateLogGroup",
+    //             "logs:CreateLogStream",
+    //             "logs:PutLogEvents",
+    //             "logs:DescribeLogStreams",
+    //             "cloudwatch:PutMetricData",
+    //             "cloudwatch:GetMetricData",
+    //             "cloudwatch:GetMetricStatistics",
+    //             "cloudwatch:ListMetrics",
+    //             "ec2:DescribeTags",
+    //             "sns:Publish",
+    //             "lambda:InvokeFunction",
+    //             "lambda:GetFunction",
+    //             "s3:GetObject", // Add this for accessing objects in S3 (assuming releases are stored there)
+    //             "s3:ListBucket", // Add this for listing buckets in S3
+    //             "dynamodb:PutItem",
+    //           ],
+    //           Resource: "*",
+    //         },
+    //       ],
+    //     },
+    //   });
+
+    // Attach the AWSLambdaBasicExecutionRole policy to the Lambda role
+    const executionRolePolicyAttachment = new aws.iam.RolePolicyAttachment("executionRolePolicyAttachment", {
+        role: lambdaRole,
+        policyArn: "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    });
+
+    const dynamoDBFullAccessPolicyAttachment = new aws.iam.RolePolicyAttachment("dynamoDBFullAccessPolicyAttachment", {
+        role: lambdaRole,
+        policyArn: "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess",
+    });
+
+    // const nodeModulesLayer = new aws.lambda.LayerVersion("nodeModulesLayer", {
+    //         layerName: "myNodeModulesLayer",
+    //         code: new pulumi.asset.AssetArchive({
+    //             "nodejs": new pulumi.asset.FileArchive("../serverless-fork/node_modules")
+    //     }),
+    //     compatibleRuntimes: ["nodejs18.x"],
+    // });
+    // const lambdaRolePolicyAttachment = new aws.iam.RolePolicyAttachment("myLambdaRolePolicyAttachment", {
+    //     policyArn: lambdaRolePolicy.arn,
+    //     role: lambdaRole,
+    // });
+
+    const lambdaFunction = new aws.lambda.Function("myLambdaFunction", {
+        runtime: aws.lambda.Runtime.NodeJS18dX, // Adjust the runtime as needed
+        // layers: [nodeModulesLayer.arn],
+        handler: "index.handler",
+        code: new pulumi.asset.FileArchive("../serverless"),
+        environment: {
+            variables: {
+                GCP_SERVICE_ACCOUNT_PRIVATE_KEY: gcpServiceAccountKeys.privateKey, // Use the service account key
+                GCP_PROJECT:'tranquil-app-406520',
+                GCP_BUCKET_NAME: gcsBucket.name,
+                MAILGUN_API_KEY: "cfb9ce88c6e1d454e319d482d4e13e91-30b58138-0d506516", // Replace with your Mailgun API key
+                MAILGUN_DOMAIN: "demo.webappassignment.me", // Replace with your Mailgun domain
+                DYNAMO_DB_TABLE: dynamoDBTable.name,
+                // MAILGUN_EMAIL_FROM: "pancholi.n@northeastern.edu", // Replace with the email you want to send from
+                // ... (other environment variables)
+            },
+        },
+        role: lambdaRole.arn, // Specify the IAM role ARN created for the Lambda function
+        // ... (other Lambda function properties)
+    });
+
+    // Create a Lambda permission to allow SNS to invoke the Lambda function
+    const lambdaPermission = new aws.lambda.Permission("lambdaPermission", {
+        action: "lambda:InvokeFunction",
+        function: lambdaFunction.name,
+        principal: "sns.amazonaws.com",
+        sourceArn: snsTopic.arn,
+    });
+   
+    // Subscribe the Lambda function to the SNS topic
+    const snsTopicSubscription = new aws.sns.TopicSubscription(
+        "mySnsTopicSubscription",
+        {
+        topic: snsTopic.arn,
+        protocol: "lambda",
+        endpoint: lambdaFunction.arn,
+        }
+    );
+
+    
     const role = new aws.iam.Role("cloud-watch-user", {
         assumeRolePolicy: JSON.stringify({
           Version: "2012-10-17",
@@ -96,6 +245,8 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
                 "cloudwatch:GetMetricStatistics",
                 "cloudwatch:ListMetrics",
                 "ec2:DescribeTags",
+                "sns:Publish",
+                "dynamodb:PutItem",
               ],
               Resource: "*",
             },
@@ -242,7 +393,8 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
                 protocol: `${protocolType}`,
                 fromPort: 22,
                 toPort: 22,
-                cidrBlocks: [`${destinationCidr}`], 
+                cidrBlocks: ["0.0.0.0/0"], 
+                // securityGroups: [loadBalancerSecurityGroup.id],
             },
             // {
             //     protocol: `${protocolType}`,
@@ -332,17 +484,17 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
     });
     endpoint = rdsInstance.endpoint;
 
-    const userDataScript = pulumi.interpolate `
-    #!/bin/bash
-    #!/bin/bash
-    echo "NODE_ENV=amienv" >> /etc/environment
-    endpoint="${rdsInstance.endpoint}"
-    echo "HOST=\${endpoint%:*}" >> /etc/environment
-    echo "PORT=3306" >> /etc/environment
-    echo DATABASE_USERNAME=csye6225 >> /etc/environment
-    echo DATABASE_PASSWORD=root1234 >> /etc/environment
-    echo DATABASE_NAME=csye6225 >> /etc/environment
-    sudo systemctl start webapp`.apply(s => Buffer.from(s).toString('base64'));
+    // const userDataScript = pulumi.interpolate `
+    // #!/bin/bash
+    // #!/bin/bash
+    // echo "NODE_ENV=amienv" >> /etc/environment
+    // endpoint="${rdsInstance.endpoint}"
+    // echo "HOST=\${endpoint%:*}" >> /etc/environment
+    // echo "PORT=3306" >> /etc/environment
+    // echo DATABASE_USERNAME=csye6225 >> /etc/environment
+    // echo DATABASE_PASSWORD=root1234 >> /etc/environment
+    // echo DATABASE_NAME=csye6225 >> /etc/environment
+    // sudo systemctl start webapp`.apply(s => Buffer.from(s).toString('base64'));
 
   const selectedPublicSubnet = publicSubnets[0];
 //   const ec2Instance = new aws.ec2.Instance(`${ec2InstanceName}`, {
@@ -388,7 +540,7 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
         networkInterfaces: [{
             // If you're specifying a subnet within the network interface, uncomment below
             // subnetId: subnetIds[0],
-            //associatePublicIpAddress: true, // Set to false if you do not want public IPs
+            associatePublicIpAddress: true, // Set to false if you do not want public IPs
             securityGroups: [applicationSecurityGroup.id],
         }],
         rootBlockDevice: {
@@ -413,6 +565,7 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
         echo "PORT=3306" >> /etc/environment
         echo DATABASE_USERNAME=csye6225 >> /etc/environment
         echo DATABASE_PASSWORD=root1234 >> /etc/environment
+        echo SNS_TOPIC_ARN="${snsTopic.arn}" >> /etc/environment
         echo DATABASE_NAME=csye6225 >> /etc/environment
         sudo systemctl start webapp
       `.apply(s => Buffer.from(s).toString('base64')),
@@ -551,7 +704,7 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
     //             },
     //         },
     //     ],
-    // });
+    // });  
     const myDomainARecord = new awsRoute53.Record("my-domain-a-record", {
         name: "demo.webappassignment.me",
         type: "A",
