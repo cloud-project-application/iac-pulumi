@@ -680,7 +680,10 @@ aws.getAvailabilityZones({ state: `${state}` }).then(data => {
     // Create a listener for the ALB
     const listener = new aws.lb.Listener("myListener", {
         loadBalancerArn: myLoadBalancer.arn, // Reference to the ALB you just created
-        port: 80, // Port to listen on
+        port: 443, 
+        protocol: "HTTPS",
+        sslPolicy: "ELBSecurityPolicy-2016-08", // You can choose the appropriate security policy
+        certificateArn: "arn:aws:acm:us-east-1:261455965941:certificate/a8ac621f-38e6-4ddb-b3f1-7d3248eb2d01", // Replace with your ACM Certificate ARN
         defaultActions: [{
             type: "forward",
             targetGroupArn: targetGroup.arn, // Reference to the target group
